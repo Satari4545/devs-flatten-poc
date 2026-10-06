@@ -19,7 +19,8 @@ python3 flat_pingpong.py   # run the standalone flattened model
 | `flatten.py` §1 `dissolve()` | Recursive hierarchy dissolution | Adapted from adevs `Coupled::assign_to_graph()` (`include/adevs/models.h`) |
 | `flatten.py` §2 `FlatGraph` | Flat components + direct routing table | Adapted from adevs `include/adevs/graph.h` |
 | `flatten.py` §3 `FlatSimulator` | Event loop over the flat graph | Adapted from adevs `include/adevs/simulator.h` |
-| `emit.py` → `flat_pingpong.py` | The flattened model as a standalone file | Ours — adevs has no equivalent |
+| `flatten.py` §4 `Resultant` | The flat graph as ONE atomic model (single ta/lam/delta_int) | Ours — this is Hazel's "second image"; adevs stops at the flat graph |
+| `emit.py` → `flat_pingpong.py` | The resultant as a standalone file | Ours — adevs has no equivalent |
 
 "Adapted" is stated honestly: adevs is C++, this is a simplified Python
 reimplementation of the same algorithm, not a verbatim copy.
@@ -31,12 +32,15 @@ walks that structure once (`dissolve`), gives every atomic a dotted path,
 and rewrites every coupling as a direct atomic-to-atomic edge. What remains
 is a flat graph — no hierarchy — which the simulator runs by repeating one
 rule: the smallest timer wins, imminents output, outputs route directly,
-transitions apply. That loop *is* the closure-under-coupling resultant
-evaluated on demand, which is why the cartesian product of state spaces is
-never enumerated. `emit.py` then writes the whole thing out as a single
-file: initial states as plain data, the routing table, and the same loop.
-That last step — spitting out the resultant instead of only simulating it —
-is what adevs doesn't do, and what this repo adds.
+transitions apply. `Resultant` takes the last step Hazel asked for: it wraps
+the flat graph in a single atomic interface, so the simulator talks to one
+object and the scheduling/routing live inside its transition functions.
+That wrapper *is* the closure-under-coupling resultant evaluated on demand,
+which is why the cartesian product of state spaces is never enumerated.
+`emit.py` then writes the whole thing out as a single file: one atomic class
+holding the initial states as plain data, the routing table, and the same
+transition functions. That last step — spitting out the resultant instead of
+only simulating it — is what adevs doesn't do, and what this repo adds.
 
 ## The repo this came from
 

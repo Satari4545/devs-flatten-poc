@@ -29,6 +29,11 @@ file named in its header comment.
 What adevs does NOT do (and this repo adds in emit.py): write the flattened
 model out as a standalone file. adevs flattens only inside its own simulator
 to run faster; the flat graph never leaves it.
+
+Section 4 below is also OURS: the resultant as ONE atomic model — Hazel's
+second image. The simulator talks to a single object with one ta(), one
+lam(), one delta_int(); the scheduling and routing that FlatSimulator did
+externally now live inside those transition functions.
 """
 
 from pingpong import Atomic, Coupled, INF
@@ -137,3 +142,59 @@ class FlatSimulator:
         for _ in range(steps):
             self.step()
         return self.trace
+
+
+# ---------------------------------------------------------------------------
+# Section 4 — OURS (adevs has no equivalent)
+#
+# The resultant as ONE atomic model: Hazel's second image. The simulator
+# sees a single object — one ta(), one lam(), one delta_int() — and everything
+# the FlatSimulator did externally (scheduling, routing, transitions) now
+# happens inside these three functions.
+#
+# The state is the product of the component states, exactly as the
+# closure-under-coupling proof defines it (paper, Section 3) — but it is
+# never enumerated. Each function computes on demand from the components,
+# which is why the "insane" cartesian product is never a problem.
+# ---------------------------------------------------------------------------
+class Resultant(Atomic):
+    def __init__(self, graph):
+        super().__init__("resultant")
+        self.graph = graph
+
+    # -- the single atomic interface: everything the simulator sees --
+    def ta(self):
+        # Paper Section 3: the resultant's time advance is the minimum of
+        # the components' time advances.
+        return min(a.ta() for a in self.graph.atomics.values())
+
+    def lam(self):
+        # Pure preview: no clocks move, no transitions fire. Reports what
+        # the imminent components would output.
+        if self.ta() == INF:
+            return []
+        return [(p, a.lam()) for p, a in self.graph.atomics.items()
+                if a.ta() == self.ta() and a.lam() is not None]
+
+    def delta_int(self):
+        # The entire flat-graph step, internalized: advance the clocks,
+        # collect imminent outputs, route them directly, apply transitions.
+        sigma = self.ta()
+        assert sigma != INF, "deadlock: no atomic will ever act again"
+        for a in self.graph.atomics.values():
+            a.sigma -= sigma
+        imminent = [p for p, a in self.graph.atomics.items() if a.ta() == 0]
+        bags = {}
+        for p in imminent:
+            out = self.graph.atomics[p].lam()
+            if out is not None:
+                for d in self.graph.routes.get(p, []):
+                    bags.setdefault(d, []).append(out)
+        for p, a in self.graph.atomics.items():
+            if p in imminent:
+                a.delta_int()
+            if p in bags:
+                a.delta_ext(bags[p])
+
+    def delta_ext(self, bag):
+        raise NotImplementedError("ping-pong is closed: it takes no external input")
