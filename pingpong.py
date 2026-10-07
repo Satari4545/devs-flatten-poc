@@ -3,11 +3,10 @@ HIT_TIME = 1.0
 
 
 class Atomic:
-    # the smallest unit of behavior: a phase, a timer, and four functions
     def __init__(self, name):
         self.name = name
         self.phase = "no_ball"
-        self.sigma = INF  # time until my next event; INF means passive
+        self.sigma = INF  # time until next event
 
     def ta(self):
         return self.sigma
@@ -23,7 +22,6 @@ class Atomic:
 
 
 class Coupled:
-    # structure only: children + who talks to whom. no behavior of its own.
     def __init__(self, name):
         self.name = name
         self.components = {}
@@ -31,7 +29,6 @@ class Coupled:
 
 
 class Player(Atomic):
-    # one ping-pong player. holds the ball, or waits for it.
     def __init__(self, name, has_ball):
         super().__init__(name)
         if has_ball:
@@ -42,16 +39,15 @@ class Player(Atomic):
         return "ball" if self.phase == "has_ball" else None
 
     def delta_int(self):
-        self.phase = "no_ball"  # hit it: give it up, go quiet
+        self.phase = "no_ball"
         self.sigma = INF
 
     def delta_ext(self, bag):
-        self.phase = "has_ball"  # caught it: start the timer
+        self.phase = "has_ball"
         self.sigma = HIT_TIME
 
 
 class PingPong(Coupled):
-    # two players wired to each other. that's the whole model.
     def __init__(self):
         super().__init__("pingpong")
         self.components = {"A": Player("A", True), "B": Player("B", False)}

@@ -1,112 +1,112 @@
 from pingpong import Atomic, Coupled, INF
 
 
-def dissolve(model):
-    # from adevs (models.h, Coupled::assign_to_graph):
-    # walk the hierarchy once. every atomic gets a dotted path,
-    # every coupling becomes a direct atomic-to-atomic edge.
-    atomics, edges = {}, []
+def show_time(value):
+    return "INF" if value == INF else f"{value:g}"
 
-    def rec(node, prefix):
-        here = {}
+
+def dissolve(model):
+    print("dissolve: coupled model -> atomics + edges")
+
+    atomics = {}
+    edges = []
+
+    def walk(node, prefix=""):
+        children = {}
+
         for name, child in node.components.items():
             path = prefix + name
             if isinstance(child, Coupled):
-                here[name] = rec(child, path + ".")
+                print(f"  enter coupled {path}")
+                children[name] = walk(child, path + ".")
             else:
                 atomics[path] = child
-                here[name] = [path]
-        for src, dst in node.ic:
-            for s in here[src]:
-                for d in here[dst]:
-                    edges.append((s, d))
-        return [p for paths in here.values() for p in paths]
+                children[name] = [path]
+                print(
+                    f"  atomic {path}: "
+                    f"phase={child.phase}, sigma={show_time(child.sigma)}"
+                )
 
-    rec(model, "")
+        for src, dst in node.ic:
+            for src_path in children[src]:
+                for dst_path in children[dst]:
+                    edges.append((src_path, dst_path))
+                    print(f"  edge {src_path} -> {dst_path}")
+
+        return [path for paths in children.values() for path in paths]
+
+    walk(model)
+    print(f"  atomics = {list(atomics)}")
+    print(f"  edges = {edges}\n")
     return atomics, edges
 
 
 class FlatGraph:
-    # from adevs (graph.h): the flat model. atomics + who sends to whom.
     def __init__(self, atomics, edges):
+        print("FlatGraph: edges -> routes")
+
         self.atomics = atomics
         self.routes = {}
+
         for src, dst in edges:
             self.routes.setdefault(src, []).append(dst)
 
-
-class FlatSimulator:
-    # from adevs (simulator.h): the event loop over the flat graph.
-    # one step: smallest timer wins, imminents output, outputs get routed,
-    # transitions apply.
-    # (ping-pong never has a component that's both imminent and receiving,
-    # so there's no confluent case here; a general simulator would need one.)
-    def __init__(self, graph):
-        self.graph = graph
-        self.time = 0.0
-        self.trace = []
-
-    def step(self):
-        atomics = self.graph.atomics
-        sigma = min(a.ta() for a in atomics.values())
-        assert sigma != INF, "deadlock"
-        self.time += sigma
-        for a in atomics.values():
-            a.sigma -= sigma
-        imminent = [p for p, a in atomics.items() if a.ta() == 0]
-        bags = {}
-        for p in imminent:
-            out = atomics[p].lam()
-            if out is not None:
-                self.trace.append((self.time, p, out))
-                for d in self.graph.routes.get(p, []):
-                    bags.setdefault(d, []).append(out)
-        for p, a in atomics.items():
-            if p in imminent:
-                a.delta_int()
-            if p in bags:
-                a.delta_ext(bags[p])
-
-    def run(self, steps):
-        for _ in range(steps):
-            self.step()
-        return self.trace
+        print(f"  routes = {self.routes}\n")
 
 
 class Resultant(Atomic):
-    # ours: the flat graph as ONE atomic. the simulator sees a single
-    # ta/lam/delta_int; the loop above now lives inside these functions.
-    # nothing is precomputed: each function works it out on demand.
     def __init__(self, graph):
+        print("Resultant: flat graph -> one atomic model\n")
         super().__init__("resultant")
         self.graph = graph
 
     def ta(self):
-        return min(a.ta() for a in self.graph.atomics.values())
+        next_time = min(atomic.ta() for atomic in self.graph.atomics.values())
+        print(f"ta() -> {show_time(next_time)}")
+        return next_time
 
     def lam(self):
-        if self.ta() == INF:
-            return []
-        return [(p, a.lam()) for p, a in self.graph.atomics.items()
-                if a.ta() == self.ta() and a.lam() is not None]
+        next_time = min(atomic.ta() for atomic in self.graph.atomics.values())
+        outputs = [
+            (name, atomic.lam())
+            for name, atomic in self.graph.atomics.items()
+            if atomic.ta() == next_time and atomic.lam() is not None
+        ]
+        print(f"lam() -> {outputs}")
+        return outputs
 
     def delta_int(self):
-        sigma = self.ta()
-        assert sigma != INF, "deadlock"
-        for a in self.graph.atomics.values():
-            a.sigma -= sigma
-        imminent = [p for p, a in self.graph.atomics.items() if a.ta() == 0]
+        next_time = min(atomic.ta() for atomic in self.graph.atomics.values())
+        assert next_time != INF, "deadlock"
+
+        print(f"delta_int(): advance {show_time(next_time)}")
+
+        for atomic in self.graph.atomics.values():
+            atomic.sigma -= next_time
+
+        imminent = [
+            name for name, atomic in self.graph.atomics.items()
+            if atomic.ta() == 0
+        ]
+        print(f"  imminent = {imminent}")
+
         bags = {}
-        for p in imminent:
-            out = self.graph.atomics[p].lam()
-            if out is not None:
-                for d in self.graph.routes.get(p, []):
-                    bags.setdefault(d, []).append(out)
-        for p, a in self.graph.atomics.items():
-            if p in imminent:
-                a.delta_int()
-            if p in bags:
-                a.delta_ext(bags[p])
+        for src in imminent:
+            output = self.graph.atomics[src].lam()
+            if output is not None:
+                for dst in self.graph.routes.get(src, []):
+                    bags.setdefault(dst, []).append(output)
+        print(f"  routed inputs = {bags}")
+
+        for name, atomic in self.graph.atomics.items():
+            if name in imminent:
+                atomic.delta_int()
+            if name in bags:
+                atomic.delta_ext(bags[name])
+
+        for name, atomic in self.graph.atomics.items():
+            print(f"  {name}: phase={atomic.phase}, sigma={show_time(atomic.sigma)}")
+        print()
 
     def delta_ext(self, bag):
         raise NotImplementedError("ping-pong takes no external input")
