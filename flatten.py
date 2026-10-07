@@ -59,6 +59,26 @@ class Resultant(Atomic):
         print("Resultant: flat graph -> one atomic model\n")
         super().__init__("resultant")
         self.graph = graph
+        # visited states only: never the full product
+        self._cache = {}
+
+    def _key(self):
+        # one tuple of (phase, sigma) per atomic is the whole global state
+        return tuple(
+            (name, atomic.phase, atomic.sigma)
+            for name, atomic in sorted(self.graph.atomics.items())
+        )
+
+    def _snapshot(self):
+        return {
+            name: {"phase": atomic.phase, "sigma": atomic.sigma}
+            for name, atomic in self.graph.atomics.items()
+        }
+
+    def _restore(self, snap):
+        for name, atomic in self.graph.atomics.items():
+            atomic.phase = snap[name]["phase"]
+            atomic.sigma = snap[name]["sigma"]
 
     def ta(self):
         next_time = min(atomic.ta() for atomic in self.graph.atomics.values())
@@ -76,6 +96,16 @@ class Resultant(Atomic):
         return outputs
 
     def delta_int(self):
+        key = self._key()
+        hit = self._cache.get(key)
+        if hit is not None:
+            print(f"delta_int(): cache hit ({len(self._cache)} states seen)")
+            self._restore(hit)
+            for name, atomic in self.graph.atomics.items():
+                print(f"  {name}: phase={atomic.phase}, sigma={show_time(atomic.sigma)}")
+            print()
+            return
+
         next_time = min(atomic.ta() for atomic in self.graph.atomics.values())
         assert next_time != INF, "deadlock"
 
@@ -107,6 +137,8 @@ class Resultant(Atomic):
         for name, atomic in self.graph.atomics.items():
             print(f"  {name}: phase={atomic.phase}, sigma={show_time(atomic.sigma)}")
         print()
+
+        self._cache[key] = self._snapshot()
 
     def delta_ext(self, bag):
         raise NotImplementedError("ping-pong takes no external input")
