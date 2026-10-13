@@ -1,0 +1,3 @@
+[submodule "cpp/adevs"]
+	path = cpp/adevs
+	url = https://github.com/smiz/adevs.git
