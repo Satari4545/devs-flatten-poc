@@ -69,6 +69,27 @@ def _ast_of(cls, name):
     return ast.parse(src).body[0]
 
 
+# Names the generated template uses. Component code may not assign to
+# these as locals, or the inlined bodies would clash with the template.
+_RESERVED = {"dt", "out", "bag", "src", "port", "val", "value",
+             "t", "trace", "sender", "ball", "imminent"}
+
+
+def _check_locals(bodies, tag):
+    reserved = set(_RESERVED)
+    reserved.update(f"imminent_{tag}", f"out_{tag}", f"bag_{tag}")
+    for name, tree in bodies.items():
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id in reserved:
+                        raise ValueError(
+                            f"{name}: local '{target.id}' clashes with a "
+                            f"generated-template name; rename it")
+
+
 def read_component(cls, obj, tag):
     bodies = {}
     for m in ("output_function_lambda", "internal_transition_function",
@@ -101,6 +122,9 @@ def read_component(cls, obj, tag):
                         and t.value.id == "self"
                         and t.attr not in var_names):
                     var_names.append(t.attr)
+    if "elapsed" in var_names:
+        raise ValueError(f"{cls.__name__}: 'elapsed' is reserved for the compiler")
+    _check_locals(bodies, tag)
     live = vars(obj)
     return {"tag": tag,
             "vars": var_names,
@@ -132,8 +156,8 @@ class _Rename(ast.NodeTransformer):
         return node
 
 
-class _ReturnsToOut(ast.NodeTransformer):
-    """return E  ->  out.extend((TAG, p, v) for p, v in E).  (for lam)"""
+class _InlineReturns(ast.NodeTransformer):
+    """return E  ->  out.extend((TAG, port, value) for port, value in E)."""
 
     def __init__(self, tag, out):
         self.tag = tag
@@ -145,12 +169,12 @@ class _ReturnsToOut(ast.NodeTransformer):
             return None  # 'return []' adds nothing; drop it
         gen = ast.GeneratorExp(
             elt=ast.Tuple(elts=[ast.Constant(value=self.tag),
-                                ast.Name(id="__p", ctx=ast.Load()),
-                                ast.Name(id="__v", ctx=ast.Load())],
+                                ast.Name(id="port", ctx=ast.Load()),
+                                ast.Name(id="value", ctx=ast.Load())],
                           ctx=ast.Load()),
             generators=[ast.comprehension(
-                target=ast.Tuple(elts=[ast.Name(id="__p", ctx=ast.Store()),
-                                        ast.Name(id="__v", ctx=ast.Store())],
+                target=ast.Tuple(elts=[ast.Name(id="port", ctx=ast.Store()),
+                                        ast.Name(id="value", ctx=ast.Store())],
                                  ctx=ast.Store()),
                 iter=e, ifs=[], is_async=0)])
         call = ast.Call(
@@ -160,17 +184,17 @@ class _ReturnsToOut(ast.NodeTransformer):
         return ast.copy_location(ast.Expr(value=call), node)
 
 
-def _body(fn_ast, tag, bag, out=None):
+def _inline_body(fn_ast, tag, bag, out=None):
     """Renamed body statements as source lines; optionally rewrite returns."""
     tree = _Rename(tag, bag).visit(copy.deepcopy(fn_ast))
     if out is not None:
-        tree = _ReturnsToOut(tag, out).visit(tree)
+        tree = _InlineReturns(tag, out).visit(tree)
     tree = ast.fix_missing_locations(tree)
     lines = [ast.unparse(s) for s in tree.body] or ["pass"]
     return lines
 
 
-def _consts_of(comps):
+def _collect_constants(comps):
     """Module-level names used by bodies (HIT_TIME, INF, ...)."""
     bound = {"self", "input_bag", "elapsed_time", "True", "False", "None"}
     names = set()
@@ -190,7 +214,7 @@ def _consts_of(comps):
     return found
 
 
-def _val(v):
+def _format_value(v):
     if v == float("inf"):
         return 'float("inf")'
     if v == float("-inf"):
@@ -204,85 +228,90 @@ def _val(v):
 # directly. The imminent set is found at runtime (a scheduler scan,
 # not a loop over component objects).
 
-def _ind(lines, n):
+def _indent(lines, n):
     return textwrap.indent("\n".join(lines), " " * n)
 
 
-def build(comps, edges, classname):
+def build_source(comps, edges, classname):
     tags = [c["tag"] for c in comps]
 
     init_lines = []
     for c in comps:
         init_lines.append(f"# was component {c['tag']}")
         for v in c["vars"]:
-            init_lines.append(f"self.{v}_{c['tag']} = {_val(c['init'][v])}")
+            init_lines.append(
+                f"self.{v}_{c['tag']} = {_format_value(c['init'][v])}")
         init_lines.append(f"self.elapsed_{c['tag']} = 0.0")
 
-    ta = "min(" + ", ".join(f"self.sigma_{t}" for t in tags) + ")"
+    ta_expr = "min(" + ", ".join(f"self.sigma_{t}" for t in tags) + ")"
 
-    lam = ["__dt = " + ta, "__out = []"]
+    lam_lines = ["dt = " + ta_expr, "out = []"]
     for c in comps:
         t = c["tag"]
-        lam.append(f"if self.sigma_{t} == __dt:")
-        lam.append(_ind(_body(c["bodies"]["output_function_lambda"],
-                              t, f"__bag_{t}", out="__out"), 4))
-    lam.append("return __out")
+        lam_lines.append(f"if self.sigma_{t} == dt:")
+        lam_lines.append(_indent(_inline_body(
+            c["bodies"]["output_function_lambda"], t, f"bag_{t}", out="out"), 4))
+    lam_lines.append("return out")
 
-    d = [f"__dt = {ta}", 'assert __dt != INF, "deadlock"']
+    dint_lines = [f"dt = {ta_expr}", 'assert dt != INF, "deadlock"']
     for t in tags:
-        d.append(f"__imm_{t} = (self.sigma_{t} == __dt)")
-    d.append("# outputs from imminent components, before they change")
+        dint_lines.append(f"imminent_{t} = (self.sigma_{t} == dt)")
+    dint_lines.append("# outputs from imminent components, before they change")
     for c in comps:
         t = c["tag"]
-        d.append(f"__out_{t} = []")
-        d.append(f"if __imm_{t}:")
-        d.append(_ind(_body(c["bodies"]["output_function_lambda"],
-                            t, f"__bag_{t}", out=f"__out_{t}"), 4))
-    d.append("# static routing through the couplings")
+        dint_lines.append(f"out_{t} = []")
+        dint_lines.append(f"if imminent_{t}:")
+        dint_lines.append(_indent(_inline_body(
+            c["bodies"]["output_function_lambda"], t, f"bag_{t}",
+            out=f"out_{t}"), 4))
+    dint_lines.append("# static routing through the couplings")
     for t in tags:
-        d.append(f"__bag_{t} = {{}}")
+        dint_lines.append(f"bag_{t} = {{}}")
     for s, sp, dst, dp in edges:
-        d.append(f"for __c, __p, __v in __out_{s}:")
-        d.append(f"    if __p == {sp!r}:")
-        d.append(f"        __bag_{dst}.setdefault({dp!r}, []).append(__v)")
-    d.append("# advance clocks")
+        dint_lines.append(f"for src, port, val in out_{s}:")
+        dint_lines.append(f"    if port == {sp!r}:")
+        dint_lines.append(f"        bag_{dst}.setdefault({dp!r}, []).append(val)")
+    dint_lines.append("# advance clocks")
     for t in tags:
-        d.append(f"self.sigma_{t} -= __dt")
-        d.append(f"self.elapsed_{t} += __dt")
-    d.append("# apply transitions (elapsed is read before it is reset)")
+        dint_lines.append(f"self.sigma_{t} -= dt")
+        dint_lines.append(f"self.elapsed_{t} += dt")
+    dint_lines.append("# apply transitions (elapsed is read before it is reset)")
     for c in comps:
         t = c["tag"]
-        dext = _body(c["bodies"]["external_transition_function"], t, f"__bag_{t}")
-        dint = _body(c["bodies"]["internal_transition_function"], t, f"__bag_{t}")
-        dconf = (_body(c["bodies"]["confluent_transition_function"], t, f"__bag_{t}")
-                 if c["bodies"]["confluent_transition_function"] is not None
-                 else dext + dint)  # default: external then internal
-        d.append(f"if __imm_{t} and __bag_{t}:")
-        d.append(_ind(dconf + [f"self.elapsed_{t} = 0.0"], 4))
-        d.append(f"elif __imm_{t}:")
-        d.append(_ind(dint + [f"self.elapsed_{t} = 0.0"], 4))
-        d.append(f"elif __bag_{t}:")
-        d.append(_ind(dext + [f"self.elapsed_{t} = 0.0"], 4))
+        dext = _inline_body(
+            c["bodies"]["external_transition_function"], t, f"bag_{t}")
+        dint = _inline_body(
+            c["bodies"]["internal_transition_function"], t, f"bag_{t}")
+        dconf = (_inline_body(
+            c["bodies"]["confluent_transition_function"], t, f"bag_{t}")
+            if c["bodies"]["confluent_transition_function"] is not None
+            else dext + dint)  # default: external then internal
+        dint_lines.append(f"if imminent_{t} and bag_{t}:")
+        dint_lines.append(_indent(dconf + [f"self.elapsed_{t} = 0.0"], 4))
+        dint_lines.append(f"elif imminent_{t}:")
+        dint_lines.append(_indent(dint + [f"self.elapsed_{t} = 0.0"], 4))
+        dint_lines.append(f"elif bag_{t}:")
+        dint_lines.append(_indent(dext + [f"self.elapsed_{t} = 0.0"], 4))
 
     src = []
     src.append('"""Standalone atomic generated by compiler.py. Do not hand-edit;')
     src.append('regenerate instead. Flat state, five DEVS functions, no component')
     src.append('objects, no coordinator, no state enumeration."""')
-    for k, v in _consts_of(comps).items():
-        src.append(f"{k} = {_val(v)}")
+    for k, v in _collect_constants(comps).items():
+        src.append(f"{k} = {_format_value(v)}")
     src.append("")
     src.append(f"class {classname}:")
     src.append("    def __init__(self):")
-    src.append(_ind(init_lines, 8))
+    src.append(_indent(init_lines, 8))
     src.append("")
     src.append("    def time_advance(self):")
-    src.append(f"        return {ta}")
+    src.append(f"        return {ta_expr}")
     src.append("")
     src.append("    def output_function_lambda(self):")
-    src.append(_ind(lam, 8))
+    src.append(_indent(lam_lines, 8))
     src.append("")
     src.append("    def internal_transition_function(self):")
-    src.append(_ind(d, 8))
+    src.append(_indent(dint_lines, 8))
     src.append("")
     src.append("    def external_transition_function(self, elapsed_time, input_bag):")
     src.append('        raise NotImplementedError("closed model: no external input")')
@@ -291,17 +320,18 @@ def build(comps, edges, classname):
     src.append('        raise NotImplementedError("closed model: no external input")')
     src.append("")
     src.append("    def run(self, hits=10):")
-    src.append("        __t, __trace = 0.0, []")
+    src.append("        t, trace = 0.0, []")
     src.append("        for _ in range(hits):")
-    src.append("            __t += self.time_advance()")
-    src.append("            __trace.extend((round(__t, 10), __s, __v)")
-    src.append("                           for __s, __p, __v in self.output_function_lambda())")
+    src.append("            t += self.time_advance()")
+    src.append("            trace.extend((round(t, 10), sender, value)")
+    src.append("                         for sender, port, value in self.output_function_lambda())")
     src.append("            self.internal_transition_function()")
-    src.append("        return __trace")
+    src.append("        return trace")
     src.append("")
     src.append('if __name__ == "__main__":')
-    src.append(f"    for __t, __s, __o in {classname}().run():")
-    src.append('        print(f"t={__t:g}  {__s} !send {__o}")')
+    src.append(f"    for t, sender, ball in {classname}().run():")
+    src.append('        print(f"t={t:g}  {sender} !send {ball}")')
+    return "\n".join(src) + "\n"
     return "\n".join(src) + "\n"
 
 
@@ -312,7 +342,7 @@ def compile_model(coupled, out_path, classname):
     from flatten import dissolve
     atomics, edges = dissolve(coupled)
     comps = [read_component(type(a), a, n) for n, a in sorted(atomics.items())]
-    src = build(comps, edges, classname)
+    src = build_source(comps, edges, classname)
     for banned in ("Player", "FlatGraph", "Resultant", "for atomic in"):
         assert banned not in src, f"leak: {banned}"
     for fn in ("def time_advance", "def output_function_lambda",

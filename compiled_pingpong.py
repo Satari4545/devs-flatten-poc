@@ -19,74 +19,74 @@ class CompiledPingPong:
         return min(self.sigma_A, self.sigma_B)
 
     def output_function_lambda(self):
-        __dt = min(self.sigma_A, self.sigma_B)
-        __out = []
-        if self.sigma_A == __dt:
+        dt = min(self.sigma_A, self.sigma_B)
+        out = []
+        if self.sigma_A == dt:
             if self.phase_A == 'Send':
-                __out.extend((('A', __p, __v) for __p, __v in [('send', 'ball')]))
-        if self.sigma_B == __dt:
+                out.extend((('A', port, value) for port, value in [('send', 'ball')]))
+        if self.sigma_B == dt:
             if self.phase_B == 'Send':
-                __out.extend((('B', __p, __v) for __p, __v in [('send', 'ball')]))
-        return __out
+                out.extend((('B', port, value) for port, value in [('send', 'ball')]))
+        return out
 
     def internal_transition_function(self):
-        __dt = min(self.sigma_A, self.sigma_B)
-        assert __dt != INF, "deadlock"
-        __imm_A = (self.sigma_A == __dt)
-        __imm_B = (self.sigma_B == __dt)
+        dt = min(self.sigma_A, self.sigma_B)
+        assert dt != INF, "deadlock"
+        imminent_A = (self.sigma_A == dt)
+        imminent_B = (self.sigma_B == dt)
         # outputs from imminent components, before they change
-        __out_A = []
-        if __imm_A:
+        out_A = []
+        if imminent_A:
             if self.phase_A == 'Send':
-                __out_A.extend((('A', __p, __v) for __p, __v in [('send', 'ball')]))
-        __out_B = []
-        if __imm_B:
+                out_A.extend((('A', port, value) for port, value in [('send', 'ball')]))
+        out_B = []
+        if imminent_B:
             if self.phase_B == 'Send':
-                __out_B.extend((('B', __p, __v) for __p, __v in [('send', 'ball')]))
+                out_B.extend((('B', port, value) for port, value in [('send', 'ball')]))
         # static routing through the couplings
-        __bag_A = {}
-        __bag_B = {}
-        for __c, __p, __v in __out_A:
-            if __p == 'send':
-                __bag_B.setdefault('receive', []).append(__v)
-        for __c, __p, __v in __out_B:
-            if __p == 'send':
-                __bag_A.setdefault('receive', []).append(__v)
+        bag_A = {}
+        bag_B = {}
+        for src, port, val in out_A:
+            if port == 'send':
+                bag_B.setdefault('receive', []).append(val)
+        for src, port, val in out_B:
+            if port == 'send':
+                bag_A.setdefault('receive', []).append(val)
         # advance clocks
-        self.sigma_A -= __dt
-        self.elapsed_A += __dt
-        self.sigma_B -= __dt
-        self.elapsed_B += __dt
+        self.sigma_A -= dt
+        self.elapsed_A += dt
+        self.sigma_B -= dt
+        self.elapsed_B += dt
         # apply transitions (elapsed is read before it is reset)
-        if __imm_A and __bag_A:
-            if 'ball' in __bag_A.get('receive', []):
+        if imminent_A and bag_A:
+            if 'ball' in bag_A.get('receive', []):
                 self.phase_A = 'Send'
                 self.sigma_A = HIT_TIME
             self.phase_A = 'Wait'
             self.sigma_A = INF
             self.elapsed_A = 0.0
-        elif __imm_A:
+        elif imminent_A:
             self.phase_A = 'Wait'
             self.sigma_A = INF
             self.elapsed_A = 0.0
-        elif __bag_A:
-            if 'ball' in __bag_A.get('receive', []):
+        elif bag_A:
+            if 'ball' in bag_A.get('receive', []):
                 self.phase_A = 'Send'
                 self.sigma_A = HIT_TIME
             self.elapsed_A = 0.0
-        if __imm_B and __bag_B:
-            if 'ball' in __bag_B.get('receive', []):
+        if imminent_B and bag_B:
+            if 'ball' in bag_B.get('receive', []):
                 self.phase_B = 'Send'
                 self.sigma_B = HIT_TIME
             self.phase_B = 'Wait'
             self.sigma_B = INF
             self.elapsed_B = 0.0
-        elif __imm_B:
+        elif imminent_B:
             self.phase_B = 'Wait'
             self.sigma_B = INF
             self.elapsed_B = 0.0
-        elif __bag_B:
-            if 'ball' in __bag_B.get('receive', []):
+        elif bag_B:
+            if 'ball' in bag_B.get('receive', []):
                 self.phase_B = 'Send'
                 self.sigma_B = HIT_TIME
             self.elapsed_B = 0.0
@@ -98,14 +98,14 @@ class CompiledPingPong:
         raise NotImplementedError("closed model: no external input")
 
     def run(self, hits=10):
-        __t, __trace = 0.0, []
+        t, trace = 0.0, []
         for _ in range(hits):
-            __t += self.time_advance()
-            __trace.extend((round(__t, 10), __s, __v)
-                           for __s, __p, __v in self.output_function_lambda())
+            t += self.time_advance()
+            trace.extend((round(t, 10), sender, value)
+                         for sender, port, value in self.output_function_lambda())
             self.internal_transition_function()
-        return __trace
+        return trace
 
 if __name__ == "__main__":
-    for __t, __s, __o in CompiledPingPong().run():
-        print(f"t={__t:g}  {__s} !send {__o}")
+    for t, sender, ball in CompiledPingPong().run():
+        print(f"t={t:g}  {sender} !send {ball}")
