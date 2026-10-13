@@ -89,36 +89,36 @@ class Resultant(Atomic):
             print(f"  {name}: phase={atomic.phase}, "
                   f"sigma={show_time(atomic.sigma)}")
 
-    def ta(self):
-        next_time = min(atomic.ta() for atomic in self.graph.atomics.values())
-        print(f"ta() -> {show_time(next_time)}")
+    def time_advance(self):
+        next_time = min(atomic.time_advance() for atomic in self.graph.atomics.values())
+        print(f"time_advance() -> {show_time(next_time)}")
         return next_time
 
-    def lam(self):
-        next_time = min(atomic.ta() for atomic in self.graph.atomics.values())
+    def output_function_lambda(self):
+        next_time = min(atomic.time_advance() for atomic in self.graph.atomics.values())
         outputs = [
             (name, port, value)
             for name, atomic in self.graph.atomics.items()
-            if atomic.ta() == next_time
-            for port, value in atomic.lam()
+            if atomic.time_advance() == next_time
+            for port, value in atomic.output_function_lambda()
         ]
-        print(f"lam() -> {outputs}")
+        print(f"output_function_lambda() -> {outputs}")
         return outputs
 
-    def delta_int(self):
+    def internal_transition_function(self):
         key = self._key()
         hit = self._cache.get(key)
         if hit is not None:
-            print(f"delta_int(): cache hit ({len(self._cache)} states seen)")
+            print(f"internal_transition_function(): cache hit ({len(self._cache)} states seen)")
             self._restore(hit)
             self._show_state()
             print()
             return
 
-        next_time = min(atomic.ta() for atomic in self.graph.atomics.values())
+        next_time = min(atomic.time_advance() for atomic in self.graph.atomics.values())
         assert next_time != INF, "deadlock"
 
-        print(f"delta_int(): advance {show_time(next_time)}")
+        print(f"internal_transition_function(): advance {show_time(next_time)}")
 
         atomics = self.graph.atomics
         for name, atomic in atomics.items():
@@ -127,14 +127,14 @@ class Resultant(Atomic):
 
         imminent = [
             name for name, atomic in atomics.items()
-            if atomic.ta() == 0
+            if atomic.time_advance() == 0
         ]
         print(f"  imminent = {imminent}")
 
         bags = {}
         for name, atomic in atomics.items():
-            if atomic.ta() == 0:
-                for port, value in atomic.lam():
+            if atomic.time_advance() == 0:
+                for port, value in atomic.output_function_lambda():
                     for dst, dport in self.graph.routes.get((name, port), []):
                         bags.setdefault(dst, {}).setdefault(dport, []).append(value)
         print(f"  routed inputs = {bags}")
@@ -142,11 +142,11 @@ class Resultant(Atomic):
         for name, atomic in atomics.items():
             bag = bags.get(name, {})
             if name in imminent and bag:
-                atomic.delta_conf(bag)  # never fires in ping pong
+                atomic.confluent_transition_function(bag)  # never fires in ping pong
             elif name in imminent:
-                atomic.delta_int()
+                atomic.internal_transition_function()
             elif bag:
-                atomic.delta_ext(self._elapsed[name], bag)
+                atomic.external_transition_function(self._elapsed[name], bag)
             if name in imminent or bag:
                 self._elapsed[name] = 0.0
 
@@ -155,8 +155,8 @@ class Resultant(Atomic):
 
         self._cache[key] = self._snapshot()
 
-    def delta_ext(self, e, bag):
+    def external_transition_function(self, elapsed_time, input_bag):
         raise NotImplementedError("ping-pong takes no external input")
 
-    def delta_conf(self, bag):
+    def confluent_transition_function(self, input_bag):
         raise NotImplementedError("ping-pong takes no external input")

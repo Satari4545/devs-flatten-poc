@@ -40,15 +40,15 @@ class MiniSimulator:
             self._step_atomic()
 
     def _step_atomic(self):
-        next_time = self.model.ta()
+        next_time = self.model.time_advance()
         assert next_time != INF, "deadlock"
         self.time += next_time
         self.trace.extend((round(self.time, 10), src, val)
-                          for src, _, val in self.model.lam())
-        self.model.delta_int()
+                          for src, _, val in self.model.output_function_lambda())
+        self.model.internal_transition_function()
 
     def _step_coupled(self):
-        next_time = min(a.ta() for a in self.atomics.values())
+        next_time = min(a.time_advance() for a in self.atomics.values())
         assert next_time != INF, "deadlock"
         self.time += next_time
 
@@ -56,11 +56,11 @@ class MiniSimulator:
             a.sigma -= next_time
             self.elapsed[name] += next_time
 
-        imminent = [n for n, a in self.atomics.items() if a.ta() == 0]
+        imminent = [n for n, a in self.atomics.items() if a.time_advance() == 0]
 
         bags = {}
         for name in imminent:
-            for port, val in self.atomics[name].lam():
+            for port, val in self.atomics[name].output_function_lambda():
                 self.trace.append((round(self.time, 10), name, val))
                 for dst, dport in self.routes.get((name, port), []):
                     bags.setdefault(dst, {}).setdefault(dport, []).append(val)
@@ -68,11 +68,11 @@ class MiniSimulator:
         for name, a in self.atomics.items():
             bag = bags.get(name, {})
             if name in imminent and bag:
-                a.delta_conf(bag)
+                a.confluent_transition_function(bag)
             elif name in imminent:
-                a.delta_int()
+                a.internal_transition_function()
             elif bag:
-                a.delta_ext(self.elapsed[name], bag)
+                a.external_transition_function(self.elapsed[name], bag)
             if name in imminent or bag:
                 self.elapsed[name] = 0.0
 
@@ -81,8 +81,11 @@ def cpp_trace():
     # trace from the real adevs C++ run; None if it can't be built/run
     exe = os.path.join("cpp", "pingpong")
     if not os.path.exists(exe):
-        if subprocess.run(["make", "-C", "cpp"],
-                           capture_output=True).returncode != 0:
+        try:
+            built = subprocess.run(["make", "-C", "cpp"], capture_output=True)
+        except FileNotFoundError:
+            return None
+        if built.returncode != 0:
             return None
     try:
         out = subprocess.run([exe], capture_output=True, text=True,

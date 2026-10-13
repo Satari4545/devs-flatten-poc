@@ -3,7 +3,6 @@ HIT_TIME = 0.1  # Send lasts 0.1 time units, like the DEVS graph
 
 
 class Atomic:
-    # proper DEVS atomic: ports + ta/lam/delta_int/delta_ext/delta_conf
     def __init__(self, name):
         self.name = name
         self.in_ports = set()
@@ -17,22 +16,22 @@ class Atomic:
     def add_out_port(self, port):
         self.out_ports.add(port)
 
-    def ta(self):
+    def time_advance(self):
         return self.sigma
 
-    def lam(self):
+    def output_function_lambda(self):
         raise NotImplementedError  # -> [(port, value)]
 
-    def delta_int(self):
+    def internal_transition_function(self):
         raise NotImplementedError
 
-    def delta_ext(self, e, bag):
-        raise NotImplementedError  # bag: {port: [values]}
+    def external_transition_function(self, elapsed_time, input_bag):
+        raise NotImplementedError  # input_bag: {port: [values]}
 
-    def delta_conf(self, bag):
-        # standard confluent: external (at e = ta) then internal
-        self.delta_ext(self.ta(), bag)
-        self.delta_int()
+    def confluent_transition_function(self, input_bag):
+        # standard confluent: external (at elapsed_time = time_advance) then internal
+        self.external_transition_function(self.time_advance(), input_bag)
+        self.internal_transition_function()
 
 
 class Coupled:
@@ -44,7 +43,7 @@ class Coupled:
 
 
 class Player(Atomic):
-    # Send (ta=0.1) --!send--> Wait (ta=inf) --?receive--> Send
+    # Send (time_advance=0.1) --!send--> Wait (time_advance=inf) --?receive--> Send
     def __init__(self, name, starts_with_ball):
         super().__init__(name)
         self.add_in_port("receive")
@@ -53,17 +52,17 @@ class Player(Atomic):
             self.phase = "Send"
             self.sigma = HIT_TIME
 
-    def lam(self):
+    def output_function_lambda(self):
         if self.phase == "Send":
             return [("send", "ball")]
         return []
 
-    def delta_int(self):
+    def internal_transition_function(self):
         self.phase = "Wait"  # !send: hit it, go quiet
         self.sigma = INF
 
-    def delta_ext(self, e, bag):
-        if "ball" in bag.get("receive", []):
+    def external_transition_function(self, elapsed_time, input_bag):
+        if "ball" in input_bag.get("receive", []):
             self.phase = "Send"  # ?receive: caught it
             self.sigma = HIT_TIME
 
