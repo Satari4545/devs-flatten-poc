@@ -129,3 +129,17 @@ if ct is None:
 else:
     assert ct == EXPECTED, ct
     print("C++ adevs trace matches OK")
+
+# fused ideal, derived by hand: no components, no loops, no routing table
+spec = importlib.util.spec_from_file_location("fused", "fused_pingpong.py")
+fused_mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fused_mod)
+fused = fused_mod.FusedPingPong()
+ftime, fused_trace = 0.0, []
+for _ in range(10):
+    ftime += fused.ta()
+    fused_trace.extend((round(ftime, 10), holder, val)
+                       for _, (holder, val) in fused.lam())
+    fused.delta_int()
+assert fused_trace == EXPECTED, fused_trace
+print("fused model matches OK")
