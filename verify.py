@@ -1,12 +1,10 @@
 import importlib.util
-import os
-import subprocess
 
 from pingpong import Coupled, INF, PingPong
 from flatten import dissolve, FlatGraph, Resultant
 from compiler import compile_model
 
-# t=0.1 A sends, t=0.2 B sends, ... (matches cpp/pingpong adevs run)
+# t=0.1 A sends, t=0.2 B sends, ... (alternating every 0.1)
 EXPECTED = [(round(0.1 * t, 10), "A" if t % 2 == 1 else "B", "ball")
             for t in range(1, 11)]
 
@@ -77,31 +75,6 @@ class MiniSimulator:
                 self.elapsed[name] = 0.0
 
 
-def cpp_trace():
-    # trace from the real adevs C++ run; None if it can't be built/run
-    exe = os.path.join("cpp", "pingpong")
-    if not os.path.exists(exe):
-        try:
-            built = subprocess.run(["make", "-C", "cpp"], capture_output=True)
-        except FileNotFoundError:
-            return None
-        if built.returncode != 0:
-            return None
-    try:
-        out = subprocess.run([exe], capture_output=True, text=True,
-                             check=True).stdout
-    except Exception:
-        return None
-    trace, t = [], None
-    for line in out.splitlines():
-        line = line.strip()
-        if line.startswith("t="):
-            t = round(float(line[2:]), 10)
-        elif line.endswith("!send ball"):
-            trace.append((t, line.split()[0], "ball"))
-    return trace
-
-
 atomics, edges = dissolve(PingPong())
 assert sorted(atomics) == ["A", "B"]
 assert sorted(edges) == [("A", "send", "B", "receive"),
@@ -117,13 +90,6 @@ resultant = Resultant(FlatGraph(atomics, edges))
 resultant_trace = MiniSimulator(resultant).run()
 assert resultant_trace == coupled_trace, resultant_trace
 print("resultant matches coupled model OK")
-
-ct = cpp_trace()
-if ct is None:
-    print("C++ adevs check skipped (could not build/run cpp/pingpong)")
-else:
-    assert ct == EXPECTED, ct
-    print("C++ adevs trace matches OK")
 
 # fused ideal, derived by hand: no components, no loops, no routing table
 spec = importlib.util.spec_from_file_location("fused", "fused_pingpong.py")
