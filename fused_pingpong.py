@@ -24,29 +24,29 @@ class FusedPingPong:
         self.holder = "A"  # who is in Send; the other is in Wait
         self.sigma = HIT_TIME
 
-    def ta(self):
+    def time_advance(self):
         return self.sigma
 
-    def lam(self):
+    def output_function_lambda(self):
         return [("send", (self.holder, "ball"))]
 
-    def delta_int(self):
+    def internal_transition_function(self):
         self.holder = "B" if self.holder == "A" else "A"
         self.sigma = HIT_TIME
 
-    def delta_ext(self, e, bag):
+    def external_transition_function(self, elapsed_time, input_bag):
         raise NotImplementedError("closed model: no external input")
 
-    def delta_conf(self, bag):
+    def confluent_transition_function(self, input_bag):
         raise NotImplementedError("closed model: no external input")
 
     def run(self, hits=10):
         time, trace = 0.0, []
         for _ in range(hits):
-            time += self.ta()
+            time += self.time_advance()
             trace.extend((round(time, 10), holder, val)
-                         for _, (holder, val) in self.lam())
-            self.delta_int()
+                         for _, (holder, val) in self.output_function_lambda())
+            self.internal_transition_function()
         return trace
 
 

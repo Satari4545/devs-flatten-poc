@@ -140,9 +140,9 @@ spec.loader.exec_module(fused_mod)
 fused = fused_mod.FusedPingPong()
 ftime, fused_trace = 0.0, []
 for _ in range(10):
-    ftime += fused.ta()
+    ftime += fused.time_advance()
     fused_trace.extend((round(ftime, 10), holder, val)
-                       for _, (holder, val) in fused.lam())
-    fused.delta_int()
+                       for _, (holder, val) in fused.output_function_lambda())
+    fused.internal_transition_function()
 assert fused_trace == EXPECTED, fused_trace
 print("fused model matches OK")
