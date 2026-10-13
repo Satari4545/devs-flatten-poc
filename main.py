@@ -15,11 +15,11 @@ def run_flatten_demo():
     time = 0.0
     for step in range(1, 5):
         print(f"step {step}")
-        dt = model.ta()
+        dt = model.time_advance()
         time += dt
         print(f"time = {show_time(time)}")
-        model.lam()
-        model.delta_int()
+        model.output_function_lambda()
+        model.internal_transition_function()
 
 
 def run_verify():
