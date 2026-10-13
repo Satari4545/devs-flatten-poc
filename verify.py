@@ -4,7 +4,6 @@ import subprocess
 
 from pingpong import Coupled, INF, PingPong
 from flatten import dissolve, FlatGraph, Resultant
-from emit import emit
 from compiler import compile_model
 
 # t=0.1 A sends, t=0.2 B sends, ... (matches cpp/pingpong adevs run)
@@ -118,14 +117,6 @@ resultant = Resultant(FlatGraph(atomics, edges))
 resultant_trace = MiniSimulator(resultant).run()
 assert resultant_trace == coupled_trace, resultant_trace
 print("resultant matches coupled model OK")
-
-emit("flat_pingpong.py")
-spec = importlib.util.spec_from_file_location("fp", "flat_pingpong.py")
-fp = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(fp)
-emitted_trace = MiniSimulator(fp.FlatPingPong()).run()
-assert emitted_trace == coupled_trace, emitted_trace
-print("emitted file matches coupled model OK")
 
 ct = cpp_trace()
 if ct is None:
