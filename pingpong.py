@@ -2,7 +2,6 @@ INF = float("inf")
 HIT_TIME = 0.1
 
 
-# Tiny DEVS base class: state + five DEVS functions.
 class Atomic:
     def __init__(self, name):
         self.name = name
@@ -20,7 +19,6 @@ class Atomic:
     def time_advance(self):
         return self.sigma
 
-    # lambda/output: called right before an internal transition.
     def output_function_lambda(self):
         raise NotImplementedError
 
@@ -31,17 +29,15 @@ class Atomic:
         raise NotImplementedError
 
     def confluent_transition_function(self, input_bag):
-        # If input and internal event happen together, do external then internal.
         self.external_transition_function(self.time_advance(), input_bag)
         self.internal_transition_function()
 
 
-# Coupled model: components plus port-to-port internal couplings.
 class Coupled:
     def __init__(self, name):
         self.name = name
         self.components = {}
-        self.ic = []  # (src, out_port, dst, in_port)
+        self.ic = []  
 
 
 # Player has two phases: Send for 0.1 time units, then Wait forever.

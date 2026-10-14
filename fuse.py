@@ -1,14 +1,7 @@
-"""Step 3 scaffolding: Gemini-proposed fusion, verified before acceptance.
+"""
 
 Flow: coupled model + flattened summary -> Gemini -> proposed file
       -> differential test -> ACCEPT (keep) or REJECT (report).
-
-Setup:
-  pip install -U google-genai
-  export GEMINI_API_KEY=...   # or GOOGLE_API_KEY / LLM_API_KEY
-  export GEMINI_MODEL=gemini-3.8-flash  # optional
-  export GEMINI_RETRIES=3                # optional
-  # or: export GEMINI_MODELS=gemini-3.8-flash,other-model-name
 
 Run:   python3 fuse.py
 Self-test the verifier without an API key: python3 fuse.py --selftest
@@ -32,33 +25,34 @@ ENV_FILE = ".env"
 EXPECTED = reference_trace(10)
 
 PROMPT = """\
-You are given TWO compact views of the same ping-pong DEVS model.
+You are given TWO compact views of the same DEVS model:
 
-1. The readable coupled model explains the atomic behavior.
-2. The flattened summary gives the components, initial state, couplings,
-and resultant semantics without sending a long generated file.
+1. The readable coupled model describes its components and behavior.
+2. The flattened summary describes its components, initial state,
+couplings, and resultant semantics in a compact form.
 
-Your task: rewrite them as a MINIMAL fused atomic model with identical
-observable behavior.
+Your task: combine these views into a MINIMAL fused atomic DEVS model with
+the same observable behavior as the original.
 
 Rules:
-- Name the class FusedPingPong.
+- Name the class FusedModel.
 - Keep the five DEVS functions with exactly these names and signatures:
     time_advance(self)
     output_function_lambda(self) -> [(port, value)]
     internal_transition_function(self)
     external_transition_function(self, elapsed_time, input_bag)
     confluent_transition_function(self, input_bag)
-- The fused atomic output must be normal atomic DEVS shape: (port, value).
-- Preserve sender identity inside the value as (sender, payload), e.g.
-    [("send", ("A", "ball"))]
-  so the observable trace matches this JSON reference trace:
+- Use standard atomic DEVS output shape: a list of (port, value) pairs.
+- Preserve the observable events and values exactly as represented by this
+  JSON reference trace:
 {expected}
 - Look for invariants in the state, such as correlated variables or values
-  that are impossible/redundant, and collapse them into fewer meaningful
-  variables.
-- Closed model: external/confluent may raise NotImplementedError.
-- First explain the invariant you found in plain words, then give ONE
+  that are impossible or redundant, and represent them with fewer meaningful
+  state variables when possible.
+- Preserve the model's external and confluent transition semantics. If the
+  model is closed and has no external inputs, these functions may raise
+  NotImplementedError.
+- First explain the invariant(s) you found in plain words, then give ONE
   ```python block with the complete file. No other code blocks.
 
 Readable coupled model:
