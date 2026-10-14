@@ -1,101 +1,184 @@
-"""Step 3 scaffolding: LLM-proposed fusion, verified before acceptance.
+"""Step 3 scaffolding: Gemini-proposed fusion, verified before acceptance.
 
-Flow: compiled_pingpong.py -> prompt -> LLM -> proposed file
+Flow: coupled model + flattened summary -> Gemini -> proposed file
       -> differential test -> ACCEPT (keep) or REJECT (report).
 
-Setup: export LLM_API_KEY=...   (optional: LLM_MODEL, LLM_BASE_URL)
+Setup:
+  pip install -U google-genai
+  export GEMINI_API_KEY=...   # or GOOGLE_API_KEY / LLM_API_KEY
+  export GEMINI_MODEL=gemini-3.8-flash  # optional
+  export GEMINI_RETRIES=3                # optional
+  # or: export GEMINI_MODELS=gemini-3.8-flash,other-model-name
+
 Run:   python3 fuse.py
 Self-test the verifier without an API key: python3 fuse.py --selftest
 """
 
 import importlib.util
-import json
 import os
 import re
 import sys
-import urllib.request
+import time
 
-COMPILED = "compiled_pingpong.py"
+from flatten import flattened_summary
+from pingpong import PingPong
+from verify import reference_trace, simulate, trace_json
+
+COUPLED = "pingpong.py"
 PROPOSAL = "fused_proposal.py"
+ENV_FILE = ".env"
 
-# t=0.1 A sends, t=0.2 B sends, ... (alternating every 0.1)
-EXPECTED = [(round(0.1 * t, 10), "A" if t % 2 == 1 else "B", "ball")
-            for t in range(1, 11)]
+# Reference trace comes from running the trusted coupled model.
+EXPECTED = reference_trace(10)
 
 PROMPT = """\
-You are given a standalone DEVS atomic model (Python) that was mechanically
-generated from a coupled model. Its state is the full product state
-(one variable per component variable): correct but redundant.
+You are given TWO compact views of the same ping-pong DEVS model.
 
-Your task: rewrite it as a MINIMAL fused atomic with identical behavior.
+1. The readable coupled model explains the atomic behavior.
+2. The flattened summary gives the components, initial state, couplings,
+and resultant semantics without sending a long generated file.
+
+Your task: rewrite them as a MINIMAL fused atomic model with identical
+observable behavior.
 
 Rules:
+- Name the class FusedPingPong.
 - Keep the five DEVS functions with exactly these names and signatures:
     time_advance(self)
     output_function_lambda(self) -> [(port, value)]
     internal_transition_function(self)
     external_transition_function(self, elapsed_time, input_bag)
     confluent_transition_function(self, input_bag)
-- output_function_lambda returns (port, value) pairs; keep the sender
-  identity inside the value exactly as the original does.
-- Look for invariants in the state (correlated or constant variables)
-  and collapse them into fewer, meaningful variables.
-- Name the class FusedPingPong.
+- The fused atomic output must be normal atomic DEVS shape: (port, value).
+- Preserve sender identity inside the value as (sender, payload), e.g.
+    [("send", ("A", "ball"))]
+  so the observable trace matches this JSON reference trace:
+{expected}
+- Look for invariants in the state, such as correlated variables or values
+  that are impossible/redundant, and collapse them into fewer meaningful
+  variables.
 - Closed model: external/confluent may raise NotImplementedError.
 - First explain the invariant you found in plain words, then give ONE
   ```python block with the complete file. No other code blocks.
 
-The generated model:
+Readable coupled model:
 ```python
-{source}
+{coupled_source}
+```
+
+Flattened summary:
+```text
+{summary}
 ```
 """
 
 
 def build_prompt():
-    with open(COMPILED) as f:
-        src = f.read()
-    return PROMPT.format(source=src)
+    # Give the LLM code for meaning plus a compact flattened summary.
+    with open(COUPLED, encoding="utf-8") as f:
+        coupled_source = f.read()
+    return PROMPT.format(
+        coupled_source=coupled_source,
+        summary=flattened_summary(PingPong()),
+        expected=trace_json(EXPECTED),
+    )
+
+
+def load_env_file(path=ENV_FILE):
+    """Load KEY=VALUE lines from .env without adding a dependency."""
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            os.environ.setdefault(key, value)
+
+
+def _event_text(event):
+    """Best-effort text extraction from a streaming Interactions event."""
+    for attr in ("output_text", "text", "delta"):
+        value = getattr(event, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    if isinstance(event, dict):
+        for key in ("output_text", "text", "delta"):
+            value = event.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return ""
 
 
 def call_llm(prompt):
-    """Boilerplate chat-completions call. Key comes from the environment."""
-    key = os.environ.get("LLM_API_KEY")
+    """Call Gemini Interactions API using streaming so progress is visible."""
+    load_env_file()
+    key = (os.environ.get("GEMINI_API_KEY")
+           or os.environ.get("GOOGLE_API_KEY")
+           or os.environ.get("LLM_API_KEY"))
     if not key:
-        raise SystemExit("set LLM_API_KEY first: export LLM_API_KEY=...")
-    base = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
-    model = os.environ.get("LLM_MODEL", "gpt-4o")
-    body = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,
-    }).encode()
-    req = urllib.request.Request(
-        base.rstrip("/") + "/chat/completions", data=body,
-        headers={"Authorization": f"Bearer {key}",
-                 "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=180) as r:
-        data = json.load(r)
-    return data["choices"][0]["message"]["content"]
+        raise SystemExit(
+            "set GEMINI_API_KEY first, e.g. export GEMINI_API_KEY=..."
+        )
+    try:
+        from google import genai
+    except ImportError as exc:
+        raise SystemExit(
+            "install the Gemini SDK first: pip install -U google-genai"
+        ) from exc
+
+    model_text = os.environ.get("GEMINI_MODELS") or os.environ.get(
+        "GEMINI_MODEL", "gemini-3.8-flash"
+    )
+    models = [m.strip() for m in model_text.split(",") if m.strip()]
+    retries = int(os.environ.get("GEMINI_RETRIES", "3"))
+    client = genai.Client(api_key=key)
+
+    last_error = None
+    for model in models:
+        for attempt in range(1, retries + 1):
+            print(
+                f"fuse: sending streaming request to Gemini model {model} "
+                f"(attempt {attempt}/{retries})..."
+            )
+            chunks = []
+            try:
+                stream = client.interactions.create(
+                    model=model,
+                    input=prompt,
+                    stream=True,
+                )
+                for event in stream:
+                    text = _event_text(event)
+                    if text:
+                        print(text, end="", flush=True)
+                        chunks.append(text)
+                print()
+                reply = "".join(chunks)
+                if not reply.strip():
+                    raise RuntimeError("Gemini stream ended without text output")
+                print("fuse: Gemini request succeeded")
+                return reply
+            except Exception as exc:
+                last_error = exc
+                print(f"fuse: Gemini request failed: {exc}")
+                if attempt < retries:
+                    wait = 3 * attempt
+                    print(f"fuse: retrying in {wait}s...")
+                    time.sleep(wait)
+
+    raise last_error
 
 
 def extract_code(reply):
+    # The model may explain first; only the Python block becomes the proposal.
     m = re.search(r"```python\n(.*?)```", reply, re.S)
     if not m:
         raise ValueError("no ```python block in the LLM reply")
     return m.group(1)
-
-
-def run_trace(obj, hits=10):
-    t, trace = 0.0, []
-    for _ in range(hits):
-        t += obj.time_advance()
-        for _port, val in obj.output_function_lambda():
-            # convention: value carries (sender, payload), like the original
-            s, v = val if isinstance(val, tuple) and len(val) == 2 else ("?", val)
-            trace.append((round(t, 10), s, v))
-        obj.internal_transition_function()
-    return trace
 
 
 def find_atomic(mod):
@@ -107,7 +190,7 @@ def find_atomic(mod):
 
 
 def verify_candidate(path):
-    """The cage: structural checks + differential test. Returns (ok, info)."""
+    """Small deterministic judge for this PoC."""
     spec = importlib.util.spec_from_file_location("proposal", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -121,7 +204,7 @@ def verify_candidate(path):
                if not hasattr(cls, m)]
     if missing:
         return False, f"missing functions: {missing}"
-    got = run_trace(cls())
+    got = simulate(cls(), 10)
     if got != EXPECTED:
         diffs = [(g, e) for g, e in zip(got, EXPECTED) if g != e][:3]
         return False, f"trace mismatch, first diffs: {diffs}"
@@ -134,12 +217,16 @@ if __name__ == "__main__":
         ok, info = verify_candidate("fused_pingpong.py")
         print("selftest:", "ACCEPTED" if ok else "REJECTED", "-", info)
         raise SystemExit(0 if ok else 1)
-    if not os.path.exists(COMPILED):
-        raise SystemExit(f"run compiler.py first ({COMPILED} missing)")
-    print("fuse: asking the LLM for a fused version...")
-    reply = call_llm(build_prompt())
+    print("fuse: asking the LLM for the atomic model...")
+    try:
+        reply = call_llm(build_prompt())
+        code = extract_code(reply)
+    except Exception as exc:
+        print(f"fuse: error occurred before writing proposal: {exc}")
+        raise
+    print("fuse: response received and Python code block extracted")
     with open(PROPOSAL, "w") as f:
-        f.write(extract_code(reply))
+        f.write(code)
     ok, info = verify_candidate(PROPOSAL)
     print("fuse:", "ACCEPTED" if ok else "REJECTED", "-", info)
     if not ok:
