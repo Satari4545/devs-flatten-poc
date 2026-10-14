@@ -34,23 +34,15 @@ class CompiledPingPong:
         assert dt != INF, "deadlock"
         imminent_A = (self.sigma_A == dt)
         imminent_B = (self.sigma_B == dt)
-        # outputs from imminent components, before they change
-        out_A = []
-        if imminent_A:
-            if self.phase_A == 'Send':
-                out_A.extend((('A', port, value) for port, value in [('send', 'ball')]))
-        out_B = []
-        if imminent_B:
-            if self.phase_B == 'Send':
-                out_B.extend((('B', port, value) for port, value in [('send', 'ball')]))
+        # outputs first (DEVS ordering), via our own lam
+        out = self.output_function_lambda()
         # static routing through the couplings
         bag_A = {}
         bag_B = {}
-        for src, port, val in out_A:
-            if port == 'send':
+        for src, port, val in out:
+            if src == 'A' and port == 'send':
                 bag_B.setdefault('receive', []).append(val)
-        for src, port, val in out_B:
-            if port == 'send':
+            if src == 'B' and port == 'send':
                 bag_A.setdefault('receive', []).append(val)
         # advance clocks
         self.sigma_A -= dt

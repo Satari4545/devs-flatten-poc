@@ -256,20 +256,14 @@ def build_source(comps, edges, classname):
     dint_lines = [f"dt = {ta_expr}", 'assert dt != INF, "deadlock"']
     for t in tags:
         dint_lines.append(f"imminent_{t} = (self.sigma_{t} == dt)")
-    dint_lines.append("# outputs from imminent components, before they change")
-    for c in comps:
-        t = c["tag"]
-        dint_lines.append(f"out_{t} = []")
-        dint_lines.append(f"if imminent_{t}:")
-        dint_lines.append(_indent(_inline_body(
-            c["bodies"]["output_function_lambda"], t, f"bag_{t}",
-            out=f"out_{t}"), 4))
+    dint_lines.append("# outputs first (DEVS ordering), via our own lam")
+    dint_lines.append("out = self.output_function_lambda()")
     dint_lines.append("# static routing through the couplings")
     for t in tags:
         dint_lines.append(f"bag_{t} = {{}}")
+    dint_lines.append("for src, port, val in out:")
     for s, sp, dst, dp in edges:
-        dint_lines.append(f"for src, port, val in out_{s}:")
-        dint_lines.append(f"    if port == {sp!r}:")
+        dint_lines.append(f"    if src == {s!r} and port == {sp!r}:")
         dint_lines.append(f"        bag_{dst}.setdefault({dp!r}, []).append(val)")
     dint_lines.append("# advance clocks")
     for t in tags:
