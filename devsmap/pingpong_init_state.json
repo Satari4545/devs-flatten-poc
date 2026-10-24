@@ -1,0 +1,14 @@
+{
+  "init_states": {
+    "pingpong": {
+      "A": {
+        "phase": "\"Send\"",
+        "sigma": "0.1"
+      },
+      "B": {
+        "phase": "\"Wait\"",
+        "sigma": "inf"
+      }
+    }
+  }
+}

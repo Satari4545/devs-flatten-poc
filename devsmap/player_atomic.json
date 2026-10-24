@@ -1,0 +1,39 @@
+{
+  "player": {
+    "x": {
+      "receive": "string"
+    },
+    "y": {
+      "send": "string"
+    },
+    "s": {
+      "phase": "string",
+      "sigma": "R"
+    },
+    "delta_int": {
+      "otherwise": {
+        "phase": "\"Wait\"",
+        "sigma": "inf"
+      }
+    },
+    "delta_ext": {
+      "receive.bagSize() != 0": {
+        "phase": "\"Send\"",
+        "sigma": "0.1"
+      },
+      "otherwise": {}
+    },
+    "delta_con": {
+      "otherwise": {}
+    },
+    "lambda": {
+      "phase == \"Send\"": {
+        "send": "\"ball\""
+      },
+      "otherwise": {}
+    },
+    "ta": {
+      "otherwise": "sigma"
+    }
+  }
+}

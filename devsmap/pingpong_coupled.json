@@ -1,0 +1,28 @@
+{
+  "pingpong": {
+    "x": {},
+    "y": {},
+    "components": {
+      "player": [
+        "A",
+        "B"
+      ]
+    },
+    "eic": [],
+    "eoc": [],
+    "ic": [
+      {
+        "component_from": "A",
+        "port_from": "send",
+        "component_to": "B",
+        "port_to": "receive"
+      },
+      {
+        "component_from": "B",
+        "port_from": "send",
+        "component_to": "A",
+        "port_to": "receive"
+      }
+    ]
+  }
+}
